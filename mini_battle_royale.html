@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mini Battle Royale</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#111;font-family:Arial,sans-serif}
+  canvas{display:block;background:#29442d;cursor:crosshair}
+  #hud{position:fixed;left:16px;top:14px;color:#fff;font-weight:700;text-shadow:0 2px 3px #000;z-index:2}
+  #help{position:fixed;right:16px;top:14px;color:#fff;text-align:right;text-shadow:0 2px 3px #000;z-index:2}
+  #msg{position:fixed;inset:0;display:none;place-items:center;background:#0008;color:#fff;text-align:center;z-index:5}
+  #msg div{background:#18251b;padding:28px 40px;border:2px solid #fff3;border-radius:16px}
+  button{padding:10px 18px;border:0;border-radius:10px;cursor:pointer;font-weight:700}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hud"></div>
+<div id="help">WASD: di chuyển<br>Chuột: ngắm • Click: bắn<br>R: nạp đạn</div>
+<div id="msg"><div><h1 id="result"></h1><p id="sub"></p><button onclick="location.reload()">Chơi lại</button></div></div>
+
+<script>
+const c=document.getElementById('game'),ctx=c.getContext('2d'),hud=document.getElementById('hud');
+function resize(){c.width=innerWidth;c.height=innerHeight} addEventListener('resize',resize); resize();
+
+const world={w:2400,h:1600};
+const keys={}; let mouse={x:c.width/2,y:c.height/2,down:false};
+addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true;if(e.key.toLowerCase()==='r') reload()});
+addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
+c.addEventListener('mousemove',e=>{mouse.x=e.clientX;mouse.y=e.clientY});
+c.addEventListener('mousedown',()=>mouse.down=true);
+addEventListener('mouseup',()=>mouse.down=false);
+
+const player={x:1200,y:800,r:18,speed:4,hp:100,maxHp:100,ammo:30,mag:30,reload:0,cool:0,kills:0};
+const bots=[];
+for(let i=0;i<14;i++){
+  let a=Math.random()*Math.PI*2,d=350+Math.random()*700;
+  bots.push({x:1200+Math.cos(a)*d,y:800+Math.sin(a)*d,r:17,hp:60,maxHp:60,cool:Math.random()*80});
+}
+const bullets=[];
+const trees=[];
+for(let i=0;i<90;i++) trees.push({x:80+Math.random()*(world.w-160),y:80+Math.random()*(world.h-160),r:16+Math.random()*13});
+
+let zone={x:1200,y:800,r:720,target:720,timer:0};
+let cam={x:0,y:0},last=performance.now(),over=false;
+
+function clamp(v,a,b){return Math.max(a,Math.min(b,v))}
+function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y)}
+function screenToWorld(x,y){return{x:x+cam.x,y:y+cam.y}}
+
+function reload(){if(player.reload<=0&&player.ammo<player.mag)player.reload=75}
+function shoot(){
+  if(over||player.reload>0||player.cool>0)return;
+  if(player.ammo<=0){reload();return}
+  const p=screenToWorld(mouse.x,mouse.y),a=Math.atan2(p.y-player.y,p.x-player.x);
+  bullets.push({x:player.x+Math.cos(a)*22,y:player.y+Math.sin(a)*22,vx:Math.cos(a)*11,vy:Math.sin(a)*11,owner:'p',life:90});
+  player.ammo--; player.cool=8;
+}
+function botShoot(b){
+  const a=Math.atan2(player.y-b.y,player.x-b.x);
+  bullets.push({x:b.x+Math.cos(a)*20,y:b.y+Math.sin(a)*20,vx:Math.cos(a)*7,vy:Math.sin(a)*7,owner:'b',life:120});
+}
+
+function update(dt){
+  if(over)return;
+  const f=dt/16.67;
+  player.cool=Math.max(0,player.cool-dt/16.67);
+  if(player.reload>0){
+    player.reload-=dt/16.67;
+    if(player.reload<=0)player.ammo=player.mag;
+  }
+  if(mouse.down)shoot();
+
+  let dx=(keys.d?1:0)-(keys.a?1:0),dy=(keys.s?1:0)-(keys.w?1:0);
+  if(dx||dy){let l=Math.hypot(dx,dy);player.x+=dx/l*player.speed*f;player.y+=dy/l*player.speed*f}
+  player.x=clamp(player.x,20,world.w-20);player.y=clamp(player.y,20,world.h-20);
+
+  zone.timer+=dt/1000;
+  if(zone.timer>1){zone.timer=0;if(zone.r>170)zone.r-=5}
+  if(dist(player,zone)>zone.r)player.hp-=0.12*f;
+
+  for(const b of bots){
+    if(b.hp<=0)continue;
+    b.cool-=f;
+    const d=dist(b,player);
+    if(d<650){
+      const a=Math.atan2(player.y-b.y,player.x-b.x);
+      if(d>260){b.x+=Math.cos(a)*1.5*f;b.y+=Math.sin(a)*1.5*f}
+      if(d<480&&b.cool<=0){botShoot(b);b.cool=65+Math.random()*50}
+    }else{
+      b.x+=Math.cos((b.x*0.001+b.y*0.002)%6.28)*.4*f;
+      b.y+=Math.sin((b.x*0.002+b.y*0.001)%6.28)*.4*f;
+    }
+    if(dist(b,zone)>zone.r)b.hp-=0.05*f;
+  }
+
+  for(let i=bullets.length-1;i>=0;i--){
+    const q=bullets[i];q.x+=q.vx*f;q.y+=q.vy*f;q.life-=f;
+    let hit=false;
+    if(q.owner==='p'){
+      for(const b of bots)if(b.hp>0&&Math.hypot(q.x-b.x,q.y-b.y)<b.r+5){b.hp-=30;hit=true;if(b.hp<=0)player.kills++;break}
+    }else if(Math.hypot(q.x-player.x,q.y-player.y)<player.r+5){player.hp-=12;hit=true}
+    if(hit||q.life<=0||q.x<0||q.y<0||q.x>world.w||q.y>world.h)bullets.splice(i,1);
+  }
+
+  cam.x=clamp(player.x-c.width/2,0,world.w-c.width);
+  cam.y=clamp(player.y-c.height/2,0,world.h-c.height);
+
+  if(player.hp<=0)end(false);
+  if(bots.every(b=>b.hp<=0))end(true);
+}
+
+function end(win){
+  over=true;document.getElementById('msg').style.display='grid';
+  document.getElementById('result').textContent=win?'🏆 BOOYAH!':'💀 Bạn đã bị hạ';
+  document.getElementById('sub').textContent=`Hạ gục: ${player.kills} • Nhấn nút để chơi lại`;
+}
+
+function draw(){
+  ctx.clearRect(0,0,c.width,c.height);
+  ctx.save();ctx.translate(-cam.x,-cam.y);
+  ctx.fillStyle='#29442d';ctx.fillRect(0,0,world.w,world.h);
+
+  // đường/map
+  ctx.fillStyle='#6d6247';ctx.fillRect(0,740,world.w,120);ctx.fillRect(1090,0,160,world.h);
+  ctx.strokeStyle='#9c916f';ctx.lineWidth=5;ctx.setLineDash([24,20]);
+  ctx.strokeRect(0,740,world.w,120);ctx.strokeRect(1090,0,160,world.h);ctx.setLineDash([]);
+
+  for(const t of trees){
+    ctx.fillStyle='#3b2417';ctx.fillRect(t.x-5,t.y,10,25);
+    ctx.fillStyle='#173c20';ctx.beginPath();ctx.arc(t.x,t.y,t.r,0,Math.PI*2);ctx.fill();
+  }
+
+  // zone
+  ctx.fillStyle='rgba(90,140,255,.13)';ctx.fillRect(0,0,world.w,world.h);
+  ctx.globalCompositeOperation='destination-out';ctx.beginPath();ctx.arc(zone.x,zone.y,zone.r,0,Math.PI*2);ctx.fill();ctx.globalCompositeOperation='source-over';
+  ctx.strokeStyle='#7fc8ff';ctx.lineWidth=8;ctx.beginPath();ctx.arc(zone.x,zone.y,zone.r,0,Math.PI*2);ctx.stroke();
+
+  for(const q of bullets){
+    ctx.fillStyle=q.owner==='p'?'#ffe45c':'#ff6565';ctx.beginPath();ctx.arc(q.x,q.y,4,0,Math.PI*2);ctx.fill();
+  }
+
+  for(const b of bots)if(b.hp>0){
+    ctx.fillStyle='#d84a4a';ctx.beginPath();ctx.arc(b.x,b.y,b.r,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#111';ctx.fillRect(b.x-20,b.y-29,40,5);ctx.fillStyle='#63e06b';ctx.fillRect(b.x-20,b.y-29,40*(b.hp/b.maxHp),5);
+  }
+
+  ctx.fillStyle='#4d9cff';ctx.beginPath();ctx.arc(player.x,player.y,player.r,0,Math.PI*2);ctx.fill();
+  const aim=screenToWorld(mouse.x,mouse.y),ang=Math.atan2(aim.y-player.y,aim.x-player.x);
+  ctx.strokeStyle='#eee';ctx.lineWidth=7;ctx.beginPath();ctx.moveTo(player.x,player.y);ctx.lineTo(player.x+Math.cos(ang)*28,player.y+Math.sin(ang)*28);ctx.stroke();
+  ctx.restore();
+
+  hud.innerHTML=`❤️ ${Math.max(0,Math.ceil(player.hp))}/${player.maxHp} &nbsp; 🔫 ${player.ammo}/${player.mag}${player.reload>0?' ⟳':''} &nbsp; ☠️ ${player.kills} &nbsp; 🌀 ${Math.ceil(zone.r)}`;
+}
+
+function loop(t){const dt=Math.min(40,t-last);last=t;update(dt);draw();requestAnimationFrame(loop)}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
